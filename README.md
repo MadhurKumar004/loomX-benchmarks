@@ -5,7 +5,7 @@ A standalone benchmark repository for the [loomX](https://github.com/rose-compil
 This repo contains:
 
 - A custom **interproc-microbench** suite that stresses real function calls inside hot loops.
-- Scripts to fetch three widely-used external benchmark suites:
+- Three widely-used external benchmark suites, vendored in `suites/`:
   - **PolyBench/C 4.2.1** – regular affine kernels
   - **Rodinia** – realistic OpenMP/CUDA apps
   - **DataRaceBench** – LLNL data-race yes/no ground truth
@@ -15,7 +15,7 @@ This repo contains:
 
 ```
 loomX-benchmarks/
-├── setup.sh                 # fetch external suites
+├── setup.sh                 # verify / refresh vendored suites
 ├── run_all.sh               # run every suite
 ├── run_suite.sh             # run a single suite
 ├── config.env               # default environment variables
@@ -26,8 +26,10 @@ loomX-benchmarks/
 │   ├── aggregate_results.py
 │   └── lock_gpu_clocks.sh
 └── suites/
-    └── interproc-microbench/   # included custom tests
-    # polybench, rodinia, dataracebench are created by setup.sh
+    ├── interproc-microbench/   # included custom tests
+    ├── polybench/              # vendored PolyBench/C 4.2.1
+    ├── rodinia/                # vendored Rodinia
+    └── dataracebench/          # vendored DataRaceBench
 ```
 
 ## Quick start
@@ -46,13 +48,13 @@ export LOOMX=/path/to/loomX
 
 Also adjust `LD_LIBRARY_PATH` if `librose.so` is not on the default search path.
 
-### 2. Fetch external suites
+### 2. Verify vendored suites
 
 ```bash
 ./setup.sh
 ```
 
-This populates `suites/polybench/`, `suites/rodinia/`, and `suites/dataracebench/`.
+This checks that `suites/polybench/`, `suites/rodinia/`, and `suites/dataracebench/` are present. The suites are already included in this repository, so no network access is required. To update them from upstream instead, run `./setup.sh --refresh`.
 
 ### 3. Run everything
 
@@ -121,4 +123,5 @@ DataRaceBench results are written to `results/dataracebench.csv` with per-file e
 
 - GPU configs require a clang built with OpenMP offloading support and the matching `libomptarget-nvptx.bc` bitcode. If clang cannot target `nvptx64-nvidia-cuda`, the GPU variants are skipped and only CPU numbers are reported.
 - `LOCK_CLOCKS=yes` locks NVIDIA GPU clocks for reproducible timing but requires root.
-- Rodinia is fetched but not yet exercised by the default `run_all.sh` pipeline; you can extend `run_suite.sh` with a `rodinia` case if needed.
+- Rodinia is included but not yet exercised by the default `run_all.sh` pipeline; you can extend `run_suite.sh` with a `rodinia` case if needed.
+- Because the external suites are vendored, this repository is larger than a fetch-on-demand version. If size matters, delete `suites/rodinia/` or `suites/dataracebench/` and run `./setup.sh --refresh` to fetch only what you need.

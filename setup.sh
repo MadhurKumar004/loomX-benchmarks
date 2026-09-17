@@ -1,46 +1,58 @@
 #!/usr/bin/env bash
-# setup.sh -- fetch the external benchmark suites used for loomX validation.
+# setup.sh -- verify / refresh the benchmark suites used for loomX validation.
 #
-# The custom interproc-microbench corpus is already included in suites/.
-# This script clones the three external suites into suites/:
+# All suites are vendored inside this repository under suites/:
+#   - interproc-microbench (custom, included)
 #   - PolyBench/C 4.2.1
 #   - Rodinia
 #   - DataRaceBench
+#
+# Running this script without arguments just checks that the directories exist.
+# Pass --refresh to re-clone them from upstream (destructive).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUITE_DIR="${1:-$SCRIPT_DIR/suites}"
+SUITE_DIR="${2:-$SCRIPT_DIR/suites}"
 mkdir -p "$SUITE_DIR"
 cd "$SUITE_DIR"
 
-echo "== Fetching external benchmark suites into $SUITE_DIR =="
+ACTION="${1:-verify}"
 
-echo "== PolyBench/C 4.2.1 (Pouchet/Yuki, Ohio State mirror) =="
-if [ ! -d polybench ]; then
-  git clone --depth 1 https://github.com/MatthiasJReisinger/PolyBenchC-4.2.1.git polybench
-else
-  echo "  already present, skipping"
+refresh_suite() {
+    local name="$1"
+    local url="$2"
+    echo "Refreshing $name from $url ..."
+    rm -rf "$name"
+    git clone --depth 1 "$url" "$name"
+    rm -rf "$name/.git"
+}
+
+if [ "$ACTION" = "--refresh" ]; then
+    refresh_suite polybench       https://github.com/MatthiasJReisinger/PolyBenchC-4.2.1.git
+    refresh_suite rodinia         https://github.com/yuhc/gpu-rodinia.git || \
+    refresh_suite rodinia         https://github.com/ouankou/rodinia.git
+    refresh_suite dataracebench   https://github.com/LLNL/dataracebench.git
 fi
 
-echo "== Rodinia (OpenMP + CUDA source side by side) =="
-if [ ! -d rodinia ]; then
-  git clone --depth 1 https://github.com/yuhc/gpu-rodinia.git rodinia || \
-  git clone --depth 1 https://github.com/ouankou/rodinia.git rodinia
-else
-  echo "  already present, skipping"
-fi
+missing=0
+for d in interproc-microbench polybench rodinia dataracebench; do
+    if [ -d "$d" ]; then
+        echo "OK: $d"
+    else
+        echo "MISSING: $d"
+        missing=1
+    fi
+done
 
-echo "== DataRaceBench (LLNL correctness ground truth) =="
-if [ ! -d dataracebench ]; then
-  git clone --depth 1 https://github.com/LLNL/dataracebench.git dataracebench
-else
-  echo "  already present, skipping"
+if [ "$missing" -ne 0 ]; then
+    echo "ERROR: some suites are missing. Run '$0 --refresh' to fetch them." >&2
+    exit 1
 fi
 
 cat <<'EOF'
 
-Done. Layout:
+All suites present:
   suites/interproc-microbench/ -- custom hand-written interprocedural tests
   suites/polybench/            -- PolyBench/C 4.2.1 kernels
   suites/rodinia/              -- Rodinia OpenMP/CUDA apps

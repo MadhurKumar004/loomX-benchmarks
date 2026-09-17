@@ -12,8 +12,9 @@ Only modify files inside this repository. Do not edit the parent `loomX/` tree f
 ./setup.sh
 ```
 
-Fetches PolyBench/C 4.2.1, Rodinia, and DataRaceBench into `suites/`.
-The custom `interproc-microbench/` suite is already included.
+Verifies that PolyBench/C 4.2.1, Rodinia, and DataRaceBench are present under `suites/`.
+All suites are vendored in this repository; no network fetch is needed by default.
+Run `./setup.sh --refresh` to re-clone them from upstream (destructive).
 
 ## Running
 
