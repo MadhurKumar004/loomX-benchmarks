@@ -1,0 +1,23 @@
+# Build/run artifacts
+out/
+bin/
+results/
+*.o
+*.exe
+
+# External suites (fetched by setup.sh)
+suites/polybench/
+suites/rodinia/
+suites/dataracebench/
+
+# Backup files
+*~
+*.bak
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor
+.vscode/
+.idea/
