@@ -30,7 +30,7 @@ if [ ! -x "$LOOMX" ]; then
     exit 1
 fi
 
-for suite in interproc-microbench polybench dataracebench; do
+for suite in interproc-microbench polybench-loomx dataracebench; do
     dir="$SCRIPT_DIR/suites/"
     case "$suite" in
         polybench) dir="${dir}polybench" ;;

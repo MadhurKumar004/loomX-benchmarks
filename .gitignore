@@ -4,6 +4,7 @@ bin/
 results/
 *.o
 *.exe
+*.loomx.c
 
 # Backup files
 *~
