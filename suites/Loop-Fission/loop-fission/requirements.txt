@@ -1,0 +1,2 @@
+matplotlib==3.5.3
+pytablewriter==0.64.2
