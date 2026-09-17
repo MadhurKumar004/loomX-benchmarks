@@ -78,6 +78,15 @@ elif [ "$SUITE" = "polybench" ]; then
     BENCH_SRC_DIR="$PB_DIR/linear-algebra/blas"
     PB_UTILITIES_DIR="$PB_DIR/utilities"
     BENCH_ARGS="${BENCH_ARGS:-}"
+elif [ "$SUITE" = "polybench-loomx" ]; then
+    PB_DIR="$SCRIPT_DIR/suites/polybench-loomx"
+    if [ ! -d "$PB_DIR" ]; then
+        echo "ERROR: $PB_DIR not found." >&2
+        exit 1
+    fi
+    BENCHES=(gemm-loomx syrk-loomx syr2k-loomx)
+    BENCH_SRC_DIR="$PB_DIR"
+    BENCH_ARGS="${BENCH_ARGS:-}"
 else
     echo "ERROR: unknown suite '$SUITE'" >&2
     exit 1
@@ -154,7 +163,7 @@ compile_one() {
     if [ "$SUITE" = "polybench" ]; then
         extra_flags+=(-DPOLYBENCH_TIME -DLARGE_DATASET -I"$PB_UTILITIES_DIR" -I"$BENCH_SRC_DIR/$name")
         extra_flags+=("$PB_UTILITIES_DIR/polybench.c")
-    elif [ "$SUITE" = "interproc-microbench" ]; then
+    elif [ "$SUITE" = "interproc-microbench" ] || [ "$SUITE" = "polybench-loomx" ]; then
         extra_flags+=(-I"$BENCH_SRC_DIR")
     fi
 
