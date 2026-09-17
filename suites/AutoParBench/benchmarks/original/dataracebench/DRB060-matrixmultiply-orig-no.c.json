@@ -1,0 +1,37 @@
+{
+"loop - object id : 1":{
+"file":"./dataracebench/DRB060-matrixmultiply-orig-no.c",
+"function":"mmm",
+"loop id":"1",
+"loop line":"60",
+"loop column":"3",
+"pragma type":"parallel for",
+"ordered":"false",
+"offload":"false",
+"multiversioned":"false",
+"induction variable":"i",
+"private":["j","k"]
+},
+"loop - object id : 2":{
+"file":"./dataracebench/DRB060-matrixmultiply-orig-no.c",
+"function":"mmm",
+"loop id":"2",
+"loop line":"61",
+"loop column":"5",
+"pragma type":"NULL",
+"ordered":"false",
+"offload":"false",
+"multiversioned":"false"
+},
+"loop - object id : 3":{
+"file":"./dataracebench/DRB060-matrixmultiply-orig-no.c",
+"function":"mmm",
+"loop id":"3",
+"loop line":"62",
+"loop column":"7",
+"pragma type":"NULL",
+"ordered":"false",
+"offload":"false",
+"multiversioned":"false"
+}
+}
