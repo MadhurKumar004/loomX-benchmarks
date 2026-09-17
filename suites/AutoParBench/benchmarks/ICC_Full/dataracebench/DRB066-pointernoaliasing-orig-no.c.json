@@ -1,0 +1,25 @@
+{
+"loop - object id : 1":{
+"file":"./dataracebench/DRB066-pointernoaliasing-orig-no.c",
+"function":"setup",
+"loop id":"1",
+"loop line":"56",
+"loop column":"3",
+"pragma type":"parallel for",
+"ordered":"false",
+"offload":"false",
+"multiversioned":"false",
+"firstprivate":["N","m_pdv_sum","m_nvol","i"]
+},
+"loop - object id : 2":{
+"file":"./dataracebench/DRB066-pointernoaliasing-orig-no.c",
+"function":"setup",
+"loop id":"2",
+"loop line":"62",
+"loop column":"3",
+"pragma type":"NULL",
+"ordered":"false",
+"offload":"false",
+"multiversioned":"false"
+}
+}

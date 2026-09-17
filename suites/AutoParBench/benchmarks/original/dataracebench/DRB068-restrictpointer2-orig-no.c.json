@@ -1,0 +1,14 @@
+{
+"loop - object id : 1":{
+"file":"./dataracebench/DRB068-restrictpointer2-orig-no.c",
+"function":"foo",
+"loop id":"1",
+"loop line":"62",
+"loop column":"3",
+"pragma type":"parallel for",
+"ordered":"false",
+"offload":"false",
+"multiversioned":"false",
+"induction variable":"i"
+}
+}
