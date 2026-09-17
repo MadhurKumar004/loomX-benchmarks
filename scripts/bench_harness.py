@@ -58,10 +58,15 @@ def run_with_nsys(binary, args, tag):
         wall = time.perf_counter() - t0
 
         sqlite_path = report + ".sqlite"
-        subprocess.run(
-            ["nsys", "export", "-t", "sqlite", "-o", sqlite_path, report + ".nsys-rep"],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        try:
+            subprocess.run(
+                ["nsys", "export", "-t", "sqlite", "-o", sqlite_path, report + ".nsys-rep"],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError:
+            print(f"  [warn] nsys export failed; recording wall time only",
+                  file=sys.stderr)
+            return wall, 0.0, 0.0, 0.0
 
         h2d = d2h = kernel = 0.0
         try:

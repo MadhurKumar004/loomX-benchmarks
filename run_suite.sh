@@ -20,10 +20,24 @@ fi
 
 SUITE="${1:-interproc-microbench}"
 LOOMX="${LOOMX:-$SCRIPT_DIR/../loomX/tools/loomX/loomX}"
+ROSE_INSTALL_PREFIX="${ROSE_INSTALL_PREFIX:-$SCRIPT_DIR/../rose-install}"
 COMPILER_CPU="${COMPILER_CPU:-gcc}"
 COMPILER_GPU="${COMPILER_GPU:-clang}"
 RUNS="${RUNS:-10}"
 LOCK_CLOCKS="${LOCK_CLOCKS:-no}"
+USE_NSYS="${USE_NSYS:-yes}"
+BENCH_LIMIT="${BENCH_LIMIT:-0}"
+
+# Locate a host omp.h that ROSE's Clang frontend can parse. GCC's omp.h uses
+# attributes that ROSE does not understand, so we strip __malloc__(...) during
+# parsing only.
+GCC_OMP_INCLUDE=""
+if command -v gcc >/dev/null 2>&1; then
+    GCC_OMP_H="$(gcc -print-file-name=include/omp.h 2>/dev/null)"
+    if [ -n "$GCC_OMP_H" ] && [ "$GCC_OMP_H" != "include/omp.h" ]; then
+        GCC_OMP_INCLUDE="$(dirname "$GCC_OMP_H")"
+    fi
+fi
 
 # Auto-detect GPU compute capability if not provided.
 if [ -z "${GPU_ARCH:-}" ]; then
@@ -59,6 +73,7 @@ fi
 # Pick the benchmark list and source directory.
 # ---------------------------------------------------------------------------
 declare -a BENCHES
+BENCH_SRCS=()
 if [ "$SUITE" = "interproc-microbench" ]; then
     MICRO_DIR="$SCRIPT_DIR/suites/interproc-microbench"
     if [ ! -d "$MICRO_DIR" ]; then
@@ -87,9 +102,66 @@ elif [ "$SUITE" = "polybench-loomx" ]; then
     BENCHES=(gemm-loomx syrk-loomx syr2k-loomx)
     BENCH_SRC_DIR="$PB_DIR"
     BENCH_ARGS="${BENCH_ARGS:-}"
+elif [ "$SUITE" = "autoparbench" ]; then
+    APB_DIR="$SCRIPT_DIR/suites/AutoParBench"
+    if [ ! -d "$APB_DIR" ]; then
+        echo "ERROR: $APB_DIR not found." >&2
+        exit 1
+    fi
+    APB_SEQ_DIR="$APB_DIR/benchmarks/sequential"
+    APB_REF_CPU_DIR="$APB_DIR/benchmarks/reference_cpu_threading"
+    APB_REF_GPU_DIR="$APB_DIR/benchmarks/reference_gpu_target"
+    mapfile -t BENCH_SRCS < <(find "$APB_SEQ_DIR" -name '*.c' -printf '%P\n' | sort)
+    if [ "${#BENCH_SRCS[@]}" -eq 0 ]; then
+        echo "ERROR: no .c files found under $APB_SEQ_DIR" >&2
+        exit 1
+    fi
+    BENCH_ARGS="${BENCH_ARGS:-}"
+elif [ "$SUITE" = "loop-fission" ]; then
+    LF_DIR="$SCRIPT_DIR/suites/Loop-Fission/loop-fission"
+    if [ ! -d "$LF_DIR" ]; then
+        echo "ERROR: $LF_DIR not found." >&2
+        exit 1
+    fi
+    LF_ORIG_DIR="$LF_DIR/original"
+    LF_REF_DIR="$LF_DIR/fission"
+    mapfile -t BENCH_SRCS < <(find "$LF_ORIG_DIR" -name '*.c' -printf '%P\n' | sort)
+    if [ "${#BENCH_SRCS[@]}" -eq 0 ]; then
+        echo "ERROR: no .c files found under $LF_ORIG_DIR" >&2
+        exit 1
+    fi
+    BENCH_ARGS="${BENCH_ARGS:-}"
+elif [ "$SUITE" = "rodinia" ]; then
+    ROD_DIR="$SCRIPT_DIR/suites/rodinia"
+    if [ ! -d "$ROD_DIR" ]; then
+        echo "ERROR: $ROD_DIR not found. Run ./setup.sh first." >&2
+        exit 1
+    fi
+    ROD_COMMON_DIR="$ROD_DIR/common"
+    ROD_OMP_DIR="$ROD_DIR/openmp"
+    # Single-file C OpenMP benchmarks that do not need extra object files.
+    BENCH_SRCS=(
+        "particlefilter/ex_particle_OPENMP_seq.c"
+        "nn/nn_openmp.c"
+    )
+    BENCH_ARGS="${BENCH_ARGS:--x 128 -y 128 -z 10 -np 1000}"
 else
     echo "ERROR: unknown suite '$SUITE'" >&2
     exit 1
+fi
+
+# For suites that expose a flat list of relative source paths, derive the
+# short benchmark names used for directories and CSV labels.
+if [ "${#BENCH_SRCS[@]}" -gt 0 ]; then
+    BENCH_SRC_DIR="${BENCH_SRC_DIR:-}"
+    declare -a BENCHES
+    for rel in "${BENCH_SRCS[@]}"; do
+        BENCHES+=("$(printf '%s' "$rel" | sed 's/\.c$//' | tr '/' '_')")
+    done
+    if [ "$BENCH_LIMIT" -gt 0 ] && [ "${#BENCHES[@]}" -gt "$BENCH_LIMIT" ]; then
+        BENCHES=("${BENCHES[@]:0:$BENCH_LIMIT}")
+        BENCH_SRCS=("${BENCH_SRCS[@]:0:$BENCH_LIMIT}")
+    fi
 fi
 
 echo "== loomX benchmark driver =="
@@ -118,9 +190,18 @@ generate_one() {
 
     cp "$src" "out/$name/${name}__seq.c"
 
-    local loomx_args=()
+    local loomx_args=(-I"$ROSE_INSTALL_PREFIX/include/clang")
     if [ "$SUITE" = "polybench" ]; then
         loomx_args+=(-I"$PB_UTILITIES_DIR" -I"$BENCH_SRC_DIR/$name")
+    elif [ "$SUITE" = "loop-fission" ]; then
+        loomx_args+=(-I"$LF_DIR/utilities" -I"$LF_DIR/headers")
+    elif [ "$SUITE" = "rodinia" ]; then
+        # Rodinia files include <omp.h> but use a GCC omp.h that ROSE's Clang
+        # frontend cannot fully parse; strip the offending attribute.
+        loomx_args+=(-I"$ROD_COMMON_DIR")
+        if [ -n "$GCC_OMP_INCLUDE" ]; then
+            loomx_args+=(-I"$GCC_OMP_INCLUDE" -D'__malloc__(x)=')
+        fi
     fi
 
     "$LOOMX" --cpu-only "${loomx_args[@]}" "$src" -o "out/$name/${name}__cpu_omp.c" >/dev/null 2>&1 || {
@@ -138,16 +219,81 @@ generate_one() {
     return 0
 }
 
-echo "== Generating source variants =="
-for name in "${BENCHES[@]}"; do
-    if [ "$SUITE" = "polybench" ]; then
-        src="$BENCH_SRC_DIR/$name/${name}.c"
+# Per-benchmark runtime arguments. Falls back to BENCH_ARGS for suites that do
+# not need special handling.
+bench_args_for() {
+    local name="$1"
+    if [ "$SUITE" = "rodinia" ]; then
+        case "$name" in
+            particlefilter_ex_particle_OPENMP_seq)
+                echo "-x 128 -y 128 -z 10 -np 1000"
+                ;;
+            nn_nn_openmp)
+                echo "out/nn/filelist.txt 10 30.0 -90.0"
+                ;;
+            *)
+                echo "${BENCH_ARGS:-}"
+                ;;
+        esac
     else
-        src="$BENCH_SRC_DIR/${name}.c"
+        echo "${BENCH_ARGS:-}"
     fi
+}
+
+# Rodinia's nn benchmark needs synthetic hurricane data generated before it can
+# be compiled or run.
+prepare_rodinia_data() {
+    if [ "$SUITE" != "rodinia" ]; then
+        return 0
+    fi
+    for rel in "${BENCH_SRCS[@]}"; do
+        if [ "$rel" = "nn/nn_openmp.c" ]; then
+            local data_dir="out/nn/data"
+            mkdir -p "$data_dir"
+            if [ ! -f "$data_dir/cane2_0.db" ]; then
+                echo "  generating nn input data..."
+                "$COMPILER_CPU" -O3 "$ROD_OMP_DIR/nn/hurricane_gen.c" -lm \
+                    -o "out/nn/hurricane_gen"
+                (cd out/nn && ./hurricane_gen 1000 2)
+            fi
+            # Build a filelist with paths relative to the harness root so the
+            # binary can be invoked from this directory.
+            printf 'out/nn/data/cane2_0.db\nout/nn/data/cane2_1.db\n' > out/nn/filelist.txt
+        fi
+    done
+}
+
+echo "== Generating source variants =="
+if [ "${#BENCH_SRCS[@]}" -gt 0 ]; then
+    for i in "${!BENCH_SRCS[@]}"; do
+        rel="${BENCH_SRCS[$i]}"
+        name="${BENCHES[$i]}"
+        if [ "$SUITE" = "autoparbench" ]; then
+            src="$APB_SEQ_DIR/$rel"
+        elif [ "$SUITE" = "loop-fission" ]; then
+            src="$LF_ORIG_DIR/$rel"
+        elif [ "$SUITE" = "rodinia" ]; then
+            src="$ROD_OMP_DIR/$rel"
+        else
+            src="$BENCH_SRC_DIR/$rel"
+        fi
+        echo "  $name"
+        generate_one "$name" "$src" || true
+    done
+else
+    for name in "${BENCHES[@]}"; do
+        if [ "$SUITE" = "polybench" ]; then
+            src="$BENCH_SRC_DIR/$name/${name}.c"
+        else
+            src="$BENCH_SRC_DIR/${name}.c"
+        fi
     echo "  $name"
     generate_one "$name" "$src" || true
 done
+fi
+
+# Generate any suite-specific input data (e.g., Rodinia nn).
+prepare_rodinia_data
 
 # ---------------------------------------------------------------------------
 # Compile variants.
@@ -165,6 +311,11 @@ compile_one() {
         extra_flags+=("$PB_UTILITIES_DIR/polybench.c")
     elif [ "$SUITE" = "interproc-microbench" ] || [ "$SUITE" = "polybench-loomx" ]; then
         extra_flags+=(-I"$BENCH_SRC_DIR")
+    elif [ "$SUITE" = "loop-fission" ]; then
+        extra_flags+=(-I"$LF_DIR/utilities" -I"$LF_DIR/headers")
+        extra_flags+=("$LF_DIR/utilities/polybench.c")
+    elif [ "$SUITE" = "rodinia" ]; then
+        extra_flags+=(-I"$ROD_COMMON_DIR")
     fi
 
     case "$cfg" in
@@ -177,9 +328,13 @@ compile_one() {
         gpu_naive|gpu_profitable)
             local omp_include="$(dirname "$COMPILER_GPU")/../projects/openmp/runtime/src"
             [ -f "$omp_include/omp.h" ] || omp_include="$(dirname "$COMPILER_GPU")/../include"
+            local omp_libdir="$(dirname "$COMPILER_GPU")/../runtimes/runtimes-bins/openmp/runtime/src"
+            local omptarget_libdir="$(dirname "$COMPILER_GPU")/../lib/x86_64-unknown-linux-gnu"
             "$COMPILER_GPU" -O3 -fopenmp -fopenmp-targets=nvptx64-nvidia-cuda \
                 -Xopenmp-target -march="$GPU_ARCH" \
                 -I"$omp_include" \
+                -L"$omp_libdir" -Wl,-rpath,"$omp_libdir" \
+                -L"$omptarget_libdir" -Wl,-rpath,"$omptarget_libdir" \
                 "$src" "${extra_flags[@]}" -o "$bin"
             ;;
     esac
@@ -197,6 +352,55 @@ for name in "${BENCHES[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
+# Compile reference oracles (for suites that ship reference variants).
+# ---------------------------------------------------------------------------
+echo "== Compiling reference oracles =="
+if [ "$SUITE" = "autoparbench" ]; then
+    for i in "${!BENCH_SRCS[@]}"; do
+        rel="${BENCH_SRCS[$i]}"
+        name="${BENCHES[$i]}"
+        ref_cpu_src="$APB_REF_CPU_DIR/$rel"
+        ref_gpu_src="$APB_REF_GPU_DIR/$rel"
+        if [ -f "$ref_cpu_src" ]; then
+            if "$COMPILER_CPU" -O3 -fopenmp "$ref_cpu_src" -lm -o "bin/${name}__ref_cpu" >/dev/null 2>&1; then
+                echo "  ok  $name/ref_cpu"
+            else
+                echo "  skip $name/ref_cpu"
+            fi
+        fi
+        if [ -f "$ref_gpu_src" ]; then
+            omp_include="$(dirname "$COMPILER_GPU")/../projects/openmp/runtime/src"
+            [ -f "$omp_include/omp.h" ] || omp_include="$(dirname "$COMPILER_GPU")/../include"
+            omp_libdir="$(dirname "$COMPILER_GPU")/../runtimes/runtimes-bins/openmp/runtime/src"
+            omptarget_libdir="$(dirname "$COMPILER_GPU")/../lib/x86_64-unknown-linux-gnu"
+            if "$COMPILER_GPU" -O3 -fopenmp -fopenmp-targets=nvptx64-nvidia-cuda \
+                    -Xopenmp-target -march="$GPU_ARCH" \
+                    -I"$omp_include" \
+                    -L"$omp_libdir" -Wl,-rpath,"$omp_libdir" \
+                    -L"$omptarget_libdir" -Wl,-rpath,"$omptarget_libdir" \
+                    "$ref_gpu_src" -lm -o "bin/${name}__ref_gpu" >/dev/null 2>&1; then
+                echo "  ok  $name/ref_gpu"
+            else
+                echo "  skip $name/ref_gpu"
+            fi
+        fi
+    done
+elif [ "$SUITE" = "loop-fission" ]; then
+    for i in "${!BENCH_SRCS[@]}"; do
+        rel="${BENCH_SRCS[$i]}"
+        name="${BENCHES[$i]}"
+        ref_src="$LF_REF_DIR/$rel"
+        if [ -f "$ref_src" ]; then
+            if "$COMPILER_CPU" -O3 -fopenmp -I"$LF_DIR/utilities" -I"$LF_DIR/headers" "$ref_src" -lm -o "bin/${name}__ref_cpu" >/dev/null 2>&1; then
+                echo "  ok  $name/ref_cpu"
+            else
+                echo "  skip $name/ref_cpu"
+            fi
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------------------
 # Correctness checks.
 # ---------------------------------------------------------------------------
 RESULTS_CSV="results/${SUITE}.csv"
@@ -205,16 +409,29 @@ rm -f "$RESULTS_CSV"
 echo "== Correctness checks =="
 for name in "${BENCHES[@]}"; do
     seq_bin="bin/${name}__seq"
+    ref_cpu_bin="bin/${name}__ref_cpu"
+    ref_gpu_bin="bin/${name}__ref_gpu"
     [ -x "$seq_bin" ] || continue
 
+    # Use a reference oracle when one exists, otherwise fall back to the
+    # sequential binary.
+    golden_bin="$seq_bin"
+    [ -x "$ref_cpu_bin" ] && golden_bin="$ref_cpu_bin"
     golden="results/${name}__golden.out"
-    ./"$seq_bin" $BENCH_ARGS > "$golden" 2>/dev/null || true
+    bargs="$(bench_args_for "$name")"
+    ./"$golden_bin" $bargs > "$golden" 2>/dev/null || true
 
     for cfg in cpu_omp gpu_naive gpu_profitable; do
         cand="bin/${name}__${cfg}"
         [ -x "$cand" ] || continue
+        # For GPU configs, prefer a GPU reference oracle if available.
+        if [ "$cfg" = "gpu_naive" ] || [ "$cfg" = "gpu_profitable" ]; then
+            if [ -x "$ref_gpu_bin" ]; then
+                ./"$ref_gpu_bin" $bargs > "$golden" 2>/dev/null || true
+            fi
+        fi
         cand_out="results/${name}__${cfg}.out"
-        ./"$cand" $BENCH_ARGS > "$cand_out" 2>/dev/null || true
+        ./"$cand" $bargs > "$cand_out" 2>/dev/null || true
         if python3 "$SCRIPT_DIR/scripts/check_correctness.py" "$golden" "$cand_out" --rtol 1e-5 --atol 1e-8; then
             echo "  PASS $name/$cfg"
         else
@@ -230,13 +447,14 @@ done
 
 echo "== Timing ($RUNS runs each) =="
 for name in "${BENCHES[@]}"; do
+    bargs="$(bench_args_for "$name")"
     for cfg in seq cpu_omp gpu_naive gpu_profitable; do
         bin="bin/${name}__${cfg}"
         [ -x "$bin" ] || continue
         extra=""
-        [[ "$cfg" == gpu_* ]] && extra="--nsys"
+        [[ "$cfg" == gpu_* && "$USE_NSYS" == "yes" ]] && extra="--nsys"
         python3 "$SCRIPT_DIR/scripts/bench_harness.py" \
-            --binary "$bin" --args "$BENCH_ARGS" --runs "$RUNS" \
+            --binary "$bin" --args "$bargs" --runs "$RUNS" \
             --label "${name}__${cfg}" --out "$RESULTS_CSV" $extra || true
     done
 done

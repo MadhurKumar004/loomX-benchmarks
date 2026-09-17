@@ -6,11 +6,13 @@
 #
 # This runs:
 #   1. interproc-microbench (timing + correctness)
-#   2. polybench            (timing + correctness)
-#   3. dataracebench        (correctness ground truth only)
+#   2. polybench-loomx      (timing + correctness)
+#   3. autoparbench         (reference-oracle correctness; limited by loomX __float128 support)
+#   4. loop-fission         (reference-oracle correctness; limited by loomX __float128 support)
+#   5. dataracebench        (correctness ground truth only)
 #
 # Environment overrides (see config.env):
-#   LOOMX, COMPILER_CPU, COMPILER_GPU, GPU_ARCH, RUNS, BENCH_ARGS, LOCK_CLOCKS
+#   LOOMX, COMPILER_CPU, COMPILER_GPU, GPU_ARCH, RUNS, BENCH_ARGS, LOCK_CLOCKS, BENCH_LIMIT
 
 set -euo pipefail
 
@@ -30,12 +32,15 @@ if [ ! -x "$LOOMX" ]; then
     exit 1
 fi
 
-for suite in interproc-microbench polybench-loomx dataracebench; do
+for suite in interproc-microbench polybench-loomx autoparbench loop-fission rodinia dataracebench; do
     dir="$SCRIPT_DIR/suites/"
     case "$suite" in
         polybench) dir="${dir}polybench" ;;
+        polybench-loomx) dir="${dir}polybench-loomx" ;;
         rodinia)   dir="${dir}rodinia" ;;
         dataracebench) dir="${dir}dataracebench" ;;
+        autoparbench) dir="${dir}AutoParBench" ;;
+        loop-fission) dir="${dir}Loop-Fission" ;;
     esac
     if [ "$suite" != "interproc-microbench" ] && [ ! -d "$dir" ]; then
         echo "WARNING: $suite not found. Run ./setup.sh first." >&2
