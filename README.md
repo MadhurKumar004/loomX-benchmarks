@@ -9,7 +9,7 @@ This repo contains:
   - **PolyBench/C 4.2.1** – regular affine kernels
   - **Rodinia** – realistic OpenMP/CUDA apps
   - **DataRaceBench** – LLNL data-race yes/no ground truth
-- A unified harness that runs every suite through loomX, checks correctness, and aggregates timing results.
+- A unified harness that runs every suite through loomX, checks correctness against the sequential output or the suite's own verification, reports failures, and aggregates timing results.
 
 ## Directory layout
 
@@ -118,6 +118,15 @@ python3 scripts/aggregate_results.py results/polybench.csv --baseline seq
 ```
 
 DataRaceBench results are written to `results/dataracebench.csv` with per-file expected/accept/reject labels.
+
+## Correctness caveats
+
+The harness reports failures as well as passes; do not assume every parallel output matches the sequential golden output.
+
+- **PolyBench / interproc-microbench**: numerical diff against `seq` with relaxed tolerance. Failing configs are excluded from speedup aggregates.
+- **NPB**: uses the benchmark's own `Verification = SUCCESSFUL/UNSUCCESSFUL` line. Currently BT and EP fail verification on CPU OpenMP and GPU configs at the problem sizes we run; NPB's epsilon (~1e-8) rejects the small differences introduced by parallel reduction reordering.
+- **Rodinia / LLVM Test Suite / Loop-Fission**: validated by successful execution and output shape, not by bitwise or tight numerical equality, because these apps print timing or reduction-order-sensitive results.
+- **Parboil**: `cp` runs end-to-end and produces output; other base kernels need input-data handling before they can be validated.
 
 ## Notes
 
