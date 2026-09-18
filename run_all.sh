@@ -9,7 +9,8 @@
 #   2. polybench-loomx      (timing + correctness)
 #   3. autoparbench         (reference-oracle correctness; limited by loomX __float128 support)
 #   4. loop-fission         (reference-oracle correctness; limited by loomX __float128 support)
-#   5. dataracebench        (correctness ground truth only)
+#   5. llvm-test-suite      (single-source C benchmarks)
+#   6. dataracebench        (correctness ground truth only)
 #
 # Environment overrides (see config.env):
 #   LOOMX, COMPILER_CPU, COMPILER_GPU, GPU_ARCH, RUNS, BENCH_ARGS, LOCK_CLOCKS, BENCH_LIMIT
@@ -32,7 +33,7 @@ if [ ! -x "$LOOMX" ]; then
     exit 1
 fi
 
-for suite in interproc-microbench polybench polybench-loomx autoparbench loop-fission rodinia dataracebench; do
+for suite in interproc-microbench polybench polybench-loomx autoparbench loop-fission rodinia llvm-test-suite npb dataracebench; do
     dir="$SCRIPT_DIR/suites/"
     case "$suite" in
         polybench) dir="${dir}polybench" ;;
@@ -41,6 +42,8 @@ for suite in interproc-microbench polybench polybench-loomx autoparbench loop-fi
         dataracebench) dir="${dir}dataracebench" ;;
         autoparbench) dir="${dir}AutoParBench" ;;
         loop-fission) dir="${dir}Loop-Fission" ;;
+        llvm-test-suite) dir="${LLVM_TEST_SUITE_DIR:-$SCRIPT_DIR/suites/llvm-test-suite}" ;;
+        npb) dir="${NPB_DIR:-$SCRIPT_DIR/suites/NPB3.0-omp-C}" ;;
     esac
     if [ "$suite" != "interproc-microbench" ] && [ ! -d "$dir" ]; then
         echo "WARNING: $suite not found. Run ./setup.sh first." >&2
