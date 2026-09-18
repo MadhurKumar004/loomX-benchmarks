@@ -28,16 +28,17 @@ import tempfile
 import time
 
 
-def run_once(binary, args):
+def run_once(binary, args, timeout=None):
     t0 = time.perf_counter()
-    proc = subprocess.run([binary, *args], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    proc = subprocess.run([binary, *args], stdout=subprocess.DEVNULL,
+                          stderr=subprocess.PIPE, timeout=timeout)
     t1 = time.perf_counter()
     if proc.returncode != 0:
         raise RuntimeError(f"{binary} exited {proc.returncode}: {proc.stderr.decode()[:400]}")
     return t1 - t0
 
 
-def run_with_nsys(binary, args, tag):
+def run_with_nsys(binary, args, tag, timeout=None):
     """Wall time via wall clock, GPU breakdown via Nsight Systems' sqlite export.
 
     NOTE: CUPTI table/column names have shifted across nsys versions. If the
@@ -54,6 +55,7 @@ def run_with_nsys(binary, args, tag):
             ["nsys", "profile", "-o", report, "--force-overwrite=true", "--stats=false",
              binary, *args],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=timeout,
         )
         wall = time.perf_counter() - t0
 
@@ -98,6 +100,8 @@ def main():
     ap.add_argument("--out", default="results.csv")
     ap.add_argument("--nsys", action="store_true",
                      help="capture H2D/D2H/kernel breakdown via Nsight Systems")
+    ap.add_argument("--timeout", type=float, default=None,
+                     help="per-run timeout in seconds (default: no timeout)")
     args = ap.parse_args()
 
     argv = shlex.split(args.args)
@@ -105,12 +109,13 @@ def main():
 
     for i in range(args.runs):
         if args.nsys:
-            wall, h2d, d2h, kern = run_with_nsys(args.binary, argv, f"{args.label}_{i}")
+            wall, h2d, d2h, kern = run_with_nsys(args.binary, argv, f"{args.label}_{i}",
+                                                  timeout=args.timeout)
             h2ds.append(h2d)
             d2hs.append(d2h)
             kerns.append(kern)
         else:
-            wall = run_once(args.binary, argv)
+            wall = run_once(args.binary, argv, timeout=args.timeout)
         times.append(wall)
         print(f"  run {i + 1}/{args.runs}: {wall:.4f}s", file=sys.stderr)
 

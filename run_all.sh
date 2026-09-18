@@ -32,7 +32,7 @@ if [ ! -x "$LOOMX" ]; then
     exit 1
 fi
 
-for suite in interproc-microbench polybench-loomx autoparbench loop-fission rodinia dataracebench; do
+for suite in interproc-microbench polybench polybench-loomx autoparbench loop-fission rodinia dataracebench; do
     dir="$SCRIPT_DIR/suites/"
     case "$suite" in
         polybench) dir="${dir}polybench" ;;
@@ -51,7 +51,11 @@ for suite in interproc-microbench polybench-loomx autoparbench loop-fission rodi
     echo "##########################################################################"
     echo "# Running suite: $suite"
     echo "##########################################################################"
-    "$SCRIPT_DIR/run_suite.sh" "$suite" || true
+    case "$suite" in
+        polybench) SUITE_RUNS=5 ;;
+        *)         SUITE_RUNS="${RUNS:-10}" ;;
+    esac
+    RUNS="$SUITE_RUNS" "$SCRIPT_DIR/run_suite.sh" "$suite" || true
 done
 
 echo ""
