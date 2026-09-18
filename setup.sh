@@ -38,6 +38,7 @@ refresh_suite() {
 
 LLVM_TEST_SUITE_DIR="${LLVM_TEST_SUITE_DIR:-$SCRIPT_DIR/suites/llvm-test-suite}"
 NPB_DIR="${NPB_DIR:-$SCRIPT_DIR/suites/NPB3.0-omp-C}"
+PARBOIL_DIR="${PARBOIL_DIR:-$SCRIPT_DIR/suites/parboil}"
 
 if [ "$ACTION" = "--refresh" ]; then
     refresh_suite polybench       https://github.com/MatthiasJReisinger/PolyBenchC-4.2.1.git
@@ -49,6 +50,10 @@ elif [ "$ACTION" = "--refresh-llvm-test-suite" ]; then
     exit 0
 elif [ "$ACTION" = "--refresh-npb" ]; then
     refresh_suite NPB3.0-omp-C    https://github.com/benchmark-subsetting/NPB3.0-omp-C.git
+    exit 0
+elif [ "$ACTION" = "--refresh-parboil" ]; then
+    refresh_suite parboil         https://github.com/parboil-benchmarks/parboil.git || \
+    refresh_suite parboil         https://github.com/beauwright/parboil.git
     exit 0
 fi
 
@@ -72,6 +77,12 @@ if [ -d "$NPB_DIR" ]; then
     echo "OK: npb ($NPB_DIR)"
 else
     echo "MISSING: npb (set NPB_DIR or run '$0 --refresh-npb')"
+fi
+
+if [ -d "$PARBOIL_DIR" ]; then
+    echo "OK: parboil ($PARBOIL_DIR)"
+else
+    echo "MISSING: parboil (set PARBOIL_DIR or run '$0 --refresh-parboil')"
 fi
 
 if [ "$missing" -ne 0 ]; then

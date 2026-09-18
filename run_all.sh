@@ -33,7 +33,7 @@ if [ ! -x "$LOOMX" ]; then
     exit 1
 fi
 
-for suite in interproc-microbench polybench polybench-loomx autoparbench loop-fission rodinia llvm-test-suite npb dataracebench; do
+for suite in interproc-microbench polybench polybench-loomx autoparbench loop-fission rodinia llvm-test-suite npb parboil dataracebench; do
     dir="$SCRIPT_DIR/suites/"
     case "$suite" in
         polybench) dir="${dir}polybench" ;;
@@ -44,6 +44,7 @@ for suite in interproc-microbench polybench polybench-loomx autoparbench loop-fi
         loop-fission) dir="${dir}Loop-Fission" ;;
         llvm-test-suite) dir="${LLVM_TEST_SUITE_DIR:-$SCRIPT_DIR/suites/llvm-test-suite}" ;;
         npb) dir="${NPB_DIR:-$SCRIPT_DIR/suites/NPB3.0-omp-C}" ;;
+        parboil) dir="${PARBOIL_DIR:-$SCRIPT_DIR/suites/parboil}" ;;
     esac
     if [ "$suite" != "interproc-microbench" ] && [ ! -d "$dir" ]; then
         echo "WARNING: $suite not found. Run ./setup.sh first." >&2
@@ -58,7 +59,14 @@ for suite in interproc-microbench polybench polybench-loomx autoparbench loop-fi
         polybench) SUITE_RUNS=5 ;;
         *)         SUITE_RUNS="${RUNS:-10}" ;;
     esac
-    RUNS="$SUITE_RUNS" "$SCRIPT_DIR/run_suite.sh" "$suite" || true
+    case "$suite" in
+        parboil)
+            RUNS="$SUITE_RUNS" "$SCRIPT_DIR/run_parboil.sh" || true
+            ;;
+        *)
+            RUNS="$SUITE_RUNS" "$SCRIPT_DIR/run_suite.sh" "$suite" || true
+            ;;
+    esac
 done
 
 echo ""

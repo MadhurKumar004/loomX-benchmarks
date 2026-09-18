@@ -210,6 +210,23 @@ elif [ "$SUITE" = "npb" ]; then
         "EP/ep.c"
     )
     BENCH_ARGS="${BENCH_ARGS:-}"
+elif [ "$SUITE" = "parboil" ]; then
+    PARBOIL_DIR="${PARBOIL_DIR:-$SCRIPT_DIR/suites/parboil}"
+    if [ ! -d "$PARBOIL_DIR" ]; then
+        echo "ERROR: $PARBOIL_DIR not found. Clone https://github.com/parboil-benchmarks/parboil.git or set PARBOIL_DIR." >&2
+        exit 1
+    fi
+    PARBOIL_PATCH_DIR="$SCRIPT_DIR/patches/parboil"
+    PARBOIL_WORK_DIR="$SCRIPT_DIR/out/parboil_patched"
+    mkdir -p "$PARBOIL_WORK_DIR"
+    # Patched parboil.h that removes OpenCL includes/types ROSE cannot parse.
+    cp "$PARBOIL_PATCH_DIR/parboil.h" "$PARBOIL_WORK_DIR/parboil.h"
+    # Each entry is "bench_name:src_dir:file1.c file2.c ...".
+    BENCH_SPECS=(
+        "cp:benchmarks/cp/src/base:main.c cenergy.c"
+        "stencil:benchmarks/stencil/src/cpu:main.c kernels.c file.c"
+    )
+    BENCH_ARGS="${BENCH_ARGS:-}"
 else
     echo "ERROR: unknown suite '$SUITE'" >&2
     exit 1
