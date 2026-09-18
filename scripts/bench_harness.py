@@ -38,6 +38,16 @@ def run_once(binary, args, timeout=None):
     return t1 - t0
 
 
+def warmup(binary, args, iterations, timeout=None):
+    """Run the binary N times without recording time. Useful for GPU configs
+    to amortise driver initialisation / JIT compilation before the timed runs."""
+    if iterations <= 0:
+        return
+    for i in range(iterations):
+        subprocess.run([binary, *args], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=timeout, check=True)
+
+
 def run_with_nsys(binary, args, tag, timeout=None):
     """Wall time via wall clock, GPU breakdown via Nsight Systems' sqlite export.
 
@@ -102,22 +112,39 @@ def main():
                      help="capture H2D/D2H/kernel breakdown via Nsight Systems")
     ap.add_argument("--timeout", type=float, default=None,
                      help="per-run timeout in seconds (default: no timeout)")
+    ap.add_argument("--warmup", type=int, default=0,
+                     help="untimed iterations before measuring (default: 0)")
     args = ap.parse_args()
 
     argv = shlex.split(args.args)
     times, h2ds, d2hs, kerns = [], [], [], []
 
+    if args.warmup:
+        print(f"  warmup ({args.warmup} runs)", file=sys.stderr)
+        try:
+            warmup(args.binary, argv, args.warmup, timeout=args.timeout)
+        except Exception as e:
+            print(f"[{args.label}] warmup failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
     for i in range(args.runs):
-        if args.nsys:
-            wall, h2d, d2h, kern = run_with_nsys(args.binary, argv, f"{args.label}_{i}",
-                                                  timeout=args.timeout)
-            h2ds.append(h2d)
-            d2hs.append(d2h)
-            kerns.append(kern)
-        else:
-            wall = run_once(args.binary, argv, timeout=args.timeout)
-        times.append(wall)
-        print(f"  run {i + 1}/{args.runs}: {wall:.4f}s", file=sys.stderr)
+        try:
+            if args.nsys:
+                wall, h2d, d2h, kern = run_with_nsys(args.binary, argv, f"{args.label}_{i}",
+                                                      timeout=args.timeout)
+                h2ds.append(h2d)
+                d2hs.append(d2h)
+                kerns.append(kern)
+            else:
+                wall = run_once(args.binary, argv, timeout=args.timeout)
+            times.append(wall)
+            print(f"  run {i + 1}/{args.runs}: {wall:.4f}s", file=sys.stderr)
+        except subprocess.TimeoutExpired:
+            print(f"[{args.label}] run {i + 1}/{args.runs}: TIMEOUT", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"[{args.label}] run {i + 1}/{args.runs}: {e}", file=sys.stderr)
+            sys.exit(1)
 
     median = statistics.median(times)
     stdev = statistics.stdev(times) if len(times) > 1 else 0.0

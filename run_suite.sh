@@ -531,7 +531,13 @@ fi
 # Correctness checks.
 # ---------------------------------------------------------------------------
 RESULTS_CSV="results/${SUITE}.csv"
-rm -f "$RESULTS_CSV"
+CORRECTNESS_CSV="results/${SUITE}.correctness.csv"
+rm -f "$RESULTS_CSV" "$CORRECTNESS_CSV"
+
+# Track correctness per benchmark/config so timing aggregation can discard
+# configs whose output did not validate.
+declare -A CORRECTNESS
+echo "name,config,result" > "$CORRECTNESS_CSV"
 
 echo "== Correctness checks =="
 for name in "${BENCHES[@]}"; do
@@ -573,8 +579,12 @@ for name in "${BENCHES[@]}"; do
             # tolerance and rely on the aggregate to catch serious codegen bugs.
             if python3 "$SCRIPT_DIR/scripts/check_correctness.py" "$golden" "$cand_out" --rtol 1e-2 --atol 1e-4; then
                 echo "  PASS $name/$cfg"
+                CORRECTNESS["$name/$cfg"]=PASS
+                echo "$name,$cfg,PASS" >> "$CORRECTNESS_CSV"
             else
                 echo "  FAIL $name/$cfg"
+                CORRECTNESS["$name/$cfg"]=FAIL
+                echo "$name,$cfg,FAIL" >> "$CORRECTNESS_CSV"
             fi
             continue
         fi
@@ -589,8 +599,12 @@ for name in "${BENCHES[@]}"; do
         ./"$cand" $bargs > "$cand_out" 2>/dev/null || true
         if python3 "$SCRIPT_DIR/scripts/check_correctness.py" "$golden" "$cand_out" --rtol 1e-5 --atol 1e-8; then
             echo "  PASS $name/$cfg"
+            CORRECTNESS["$name/$cfg"]=PASS
+            echo "$name,$cfg,PASS" >> "$CORRECTNESS_CSV"
         else
             echo "  FAIL $name/$cfg"
+            CORRECTNESS["$name/$cfg"]=FAIL
+            echo "$name,$cfg,FAIL" >> "$CORRECTNESS_CSV"
         fi
     done
 done
@@ -608,6 +622,10 @@ for name in "${BENCHES[@]}"; do
         [ -x "$bin" ] || continue
         extra=""
         [[ "$cfg" == gpu_* && "$USE_NSYS" == "yes" ]] && extra="--nsys"
+        # GPU binaries pay a one-off driver/JIT cost on first launch; warm up
+        # once before the timed runs so the reported wall time is closer to
+        # steady-state kernel execution.
+        [[ "$cfg" == gpu_* ]] && extra="$extra --warmup 1"
         python3 "$SCRIPT_DIR/scripts/bench_harness.py" \
             --binary "$bin" --args "$bargs" --runs "$RUNS" \
             --label "${name}__${cfg}" --out "$RESULTS_CSV" \
@@ -622,7 +640,7 @@ done
 # ---------------------------------------------------------------------------
 echo "== Aggregation =="
 if [ -s "$RESULTS_CSV" ]; then
-    python3 "$SCRIPT_DIR/scripts/aggregate_results.py" "$RESULTS_CSV" --baseline seq
+    python3 "$SCRIPT_DIR/scripts/aggregate_results.py" "$RESULTS_CSV" --baseline seq --correctness-csv "$CORRECTNESS_CSV"
 else
     echo "No results collected."
 fi
