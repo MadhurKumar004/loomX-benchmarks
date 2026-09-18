@@ -786,17 +786,19 @@ for name in "${BENCHES[@]}"; do
             continue
         fi
 
-        # NPB reports verification status and timing.  A shape-only check
-        # catches crashes and silent failures; kernels that print
-        # "Verification = SUCCESSFUL" can be tightened later.
+        # NPB reports its own verification status. Use it: a kernel is only
+        # correct if it prints "Verification = SUCCESSFUL". A shape-only check
+        # is not enough; EP in particular reports UNSUCCESSFUL on GPU configs
+        # while still producing output text that looks similar to the golden
+        # run.
         if [ "$SUITE" = "npb" ]; then
             timeout "$BENCH_TIMEOUT" ./"$cand" $bargs > "$cand_out" 2>/dev/null || true
-            if python3 "$SCRIPT_DIR/scripts/check_correctness.py" "$golden" "$cand_out" --shape-only; then
+            if grep -Eq "Verification[[:space:]]*=[[:space:]]*SUCCESSFUL([[:space:]]|$)" "$cand_out"; then
                 echo "  PASS $name/$cfg"
                 CORRECTNESS["$name/$cfg"]=PASS
                 echo "$name,$cfg,PASS" >> "$CORRECTNESS_CSV"
             else
-                echo "  FAIL $name/$cfg"
+                echo "  FAIL $name/$cfg (NPB verification failed)"
                 CORRECTNESS["$name/$cfg"]=FAIL
                 echo "$name,$cfg,FAIL" >> "$CORRECTNESS_CSV"
             fi
