@@ -273,6 +273,12 @@ generate_one() {
     cp "$src" "out/$name/${name}__seq.c"
 
     local loomx_args=(-I"$ROSE_INSTALL_PREFIX/include/clang")
+    # Extra cost-model / tunable flags from LOOMX_ARGS, e.g.
+    # LOOMX_ARGS="--pcie-factor 0.15 --gpu-compute-throughput 12000"
+    local loomx_extra=()
+    if [ -n "${LOOMX_ARGS:-}" ]; then
+        read -r -a loomx_extra <<< "$LOOMX_ARGS"
+    fi
     if [ "$SUITE" = "polybench" ] || [ "$SUITE" = "polybench-full" ]; then
         local pb_inc_dir="$(dirname "$src")"
         loomx_args+=(-I"$PB_UTILITIES_DIR" -I"$pb_inc_dir")
@@ -296,15 +302,15 @@ generate_one() {
         loomx_args+=(-I"$NPB_DIR/common" -I"$(dirname "$src")")
     fi
 
-    "$LOOMX" --cpu-only "${loomx_args[@]}" "$src" -o "out/$name/${name}__cpu_omp.c" >/dev/null 2>&1 || {
+    "$LOOMX" --cpu-only "${loomx_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__cpu_omp.c" >/dev/null 2>&1 || {
         echo "  WARN: loomX --cpu-only failed for $name"
         return 1
     }
-    "$LOOMX" --gpu-naive "${loomx_args[@]}" "$src" -o "out/$name/${name}__gpu_naive.c" >/dev/null 2>&1 || {
+    "$LOOMX" --gpu-naive "${loomx_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__gpu_naive.c" >/dev/null 2>&1 || {
         echo "  WARN: loomX --gpu-naive failed for $name"
         return 1
     }
-    "$LOOMX" --gpu-profitable "${loomx_args[@]}" "$src" -o "out/$name/${name}__gpu_profitable.c" >/dev/null 2>&1 || {
+    "$LOOMX" --gpu-profitable "${loomx_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__gpu_profitable.c" >/dev/null 2>&1 || {
         echo "  WARN: loomX --gpu-profitable failed for $name"
         return 1
     }
@@ -338,9 +344,9 @@ generate_one() {
     if [ "$SUITE" = "polybench" ] || [ "$SUITE" = "polybench-full" ]; then
         local corr_args=(-DPOLYBENCH_DUMP_ARRAYS -DSMALL_DATASET)
         corr_args+=("${loomx_args[@]}")
-        "$LOOMX" --cpu-only "${corr_args[@]}" "$src" -o "out/$name/${name}__cpu_omp_corr.c" >/dev/null 2>&1 || true
-        "$LOOMX" --gpu-naive "${corr_args[@]}" "$src" -o "out/$name/${name}__gpu_naive_corr.c" >/dev/null 2>&1 || true
-        "$LOOMX" --gpu-profitable "${corr_args[@]}" "$src" -o "out/$name/${name}__gpu_profitable_corr.c" >/dev/null 2>&1 || true
+        "$LOOMX" --cpu-only "${corr_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__cpu_omp_corr.c" >/dev/null 2>&1 || true
+        "$LOOMX" --gpu-naive "${corr_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__gpu_naive_corr.c" >/dev/null 2>&1 || true
+        "$LOOMX" --gpu-profitable "${corr_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__gpu_profitable_corr.c" >/dev/null 2>&1 || true
         # Apply the same codegen workarounds to the correctness sources.
         sed -i -E 's/([0-9]+\.[0-9]*)L/\1/g' "out/$name/${name}__cpu_omp_corr.c" "out/$name/${name}__gpu_naive_corr.c" "out/$name/${name}__gpu_profitable_corr.c" 2>/dev/null || true
         sed -i -E 's/reduction\(([-+*]):([^,]+), \2\)/reduction(\1:\2)/g' "out/$name/${name}__cpu_omp_corr.c" "out/$name/${name}__gpu_naive_corr.c" "out/$name/${name}__gpu_profitable_corr.c" 2>/dev/null || true

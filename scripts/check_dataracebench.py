@@ -26,16 +26,82 @@ import sys
 import tempfile
 
 
-def run_loomx(loomx_path, src_path, mode="cpu-only"):
-    """Run loomX on src_path and return True if any loop was parallelized.
+def count_openmp_pragmas(content):
+    """Count OpenMP directives while ignoring comments and other pragmas."""
+    return len(re.findall(r"^[ \t]*#[ \t]*pragma[ \t]+omp\b", content,
+                          flags=re.MULTILINE))
+
+
+def strip_parallelization_pragmas(content):
+    """Blank execution annotations while retaining line numbers and semantics."""
+    removable = re.compile(
+        r"^[ \t]*#[ \t]*pragma[ \t]+omp[ \t]+"
+        r"(?:parallel|for|target|teams|distribute|simd|task|sections)\b.*\n?",
+        flags=re.MULTILINE,
+    )
+    def replace(match):
+        text = match.group(0).lower()
+        clause_text = re.sub(r"^[ \t]*#[ \t]*pragma[ \t]+", "", match.group(0), flags=re.IGNORECASE)
+        if "nowait" in text or "ordered" in text:
+            return "#pragma loomx semantic synchronization\n"
+        return "#pragma loomx metadata " + clause_text.lstrip() + "\n"
+
+    return removable.sub(replace, content)
+
+
+def target_loop_lines(content):
+    """Return loop lines controlled by removable OpenMP execution pragmas."""
+    lines = content.splitlines()
+    targets = []
+    pragma = re.compile(
+        r"^[ \t]*#[ \t]*pragma[ \t]+(?:loomx metadata[ \t]+)?"
+        r"(?:omp[ \t]+)?(?:parallel|for|target|teams|distribute|simd|task|sections)\b"
+    )
+    for index, line in enumerate(lines):
+        if not pragma.match(line):
+            continue
+        for candidate in range(index + 1, len(lines)):
+            stripped = lines[candidate].strip()
+            if not stripped or stripped.startswith("//"):
+                continue
+            if re.match(r"^(for|while|do)\b", stripped):
+                targets.append(candidate + 1)
+            break
+    return targets
+
+
+def run_loomx(loomx_path, src_path, mode="cpu-only", evaluation="preserve",
+              strict_race_safety=False):
+    """Run loomX and report whether it added an OpenMP directive.
+
+    Existing OpenMP directives are semantic input. They must not be counted as
+    loomX acceptance, because pragma-aware loomX intentionally preserves and
+    skips those regions.
+
     Output is written to a temporary directory so stale .loomx.c files do not
     affect later runs or get scanned as DRB sources.
     """
     with tempfile.TemporaryDirectory() as td:
+        analysis_src = src_path
+        target_lines = []
+        if evaluation == "stripped-analysis":
+            analysis_src = os.path.join(td, os.path.basename(src_path))
+            with open(src_path) as source_file:
+                source = source_file.read()
+            with open(analysis_src, "w") as analysis_file:
+                analysis_file.write(strip_parallelization_pragmas(source))
+            with open(analysis_src) as analysis_file:
+                target_lines = target_loop_lines(analysis_file.read())
+
         out_path = os.path.join(td, os.path.basename(src_path) + ".loomx.c")
+        command = [loomx_path, f"--{mode}", analysis_src, "-o", out_path]
+        if evaluation == "stripped-analysis":
+            command = [loomx_path, "--analyze-only", analysis_src]
+        if strict_race_safety:
+            command.insert(1, "--strict-race-safety")
         try:
-            subprocess.run(
-                [loomx_path, f"--{mode}", src_path, "-o", out_path],
+            completed = subprocess.run(
+                command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=120,
@@ -43,15 +109,53 @@ def run_loomx(loomx_path, src_path, mode="cpu-only"):
             )
         except Exception as e:
             print(f"  [warn] loomX failed on {src_path}: {e}", file=sys.stderr)
-            return False
+            return {
+                "added": False,
+                "preexisting": False,
+                "input_pragmas": 0,
+                "output_pragmas": 0,
+                "failed": True,
+            }
+
+        if evaluation == "stripped-analysis":
+            parallelized_lines = {
+                int(match.group(1))
+                for match in re.finditer(r"PARALLELIZED line (\d+)",
+                                         completed.stdout.decode(errors="replace"))
+            }
+            return {
+                "added": bool(target_lines) and all(
+                    line in parallelized_lines for line in target_lines
+                ),
+                "preexisting": False,
+                "input_pragmas": 0,
+                "output_pragmas": len(parallelized_lines),
+                "failed": completed.returncode != 0,
+            }
 
         if not os.path.exists(out_path):
-            return False
+            return {
+                "added": False,
+                "preexisting": False,
+                "input_pragmas": 0,
+                "output_pragmas": 0,
+                "failed": True,
+            }
 
-        with open(out_path) as f:
-            content = f.read()
-        # A parallelized loop will contain an OpenMP pragma.
-        return "#pragma omp" in content
+        with open(analysis_src) as source_file:
+            source = source_file.read()
+        with open(out_path) as output_file:
+            content = output_file.read()
+
+        input_count = count_openmp_pragmas(source)
+        output_count = count_openmp_pragmas(content)
+        return {
+            "added": output_count > input_count,
+            "preexisting": input_count > 0,
+            "input_pragmas": input_count,
+            "output_pragmas": output_count,
+            "failed": False,
+        }
 
 
 def parse_label(filename):
@@ -68,6 +172,11 @@ def main():
     ap.add_argument("--suite", required=True, help="path to dataracebench micro-benchmarks dir")
     ap.add_argument("--mode", default="cpu-only", help="loomX mode: cpu-only, gpu-naive, gpu-profitable")
     ap.add_argument("--output", default="dataracebench_results.csv")
+    ap.add_argument("--evaluation", choices=("preserve", "stripped-analysis"),
+                    default="preserve",
+                    help="preserve existing pragmas or strip only execution pragmas")
+    ap.add_argument("--strict-race-safety", action="store_true",
+                    help="reject reductions and implicit scalar privatization")
     args = ap.parse_args()
 
     results = []
@@ -75,6 +184,8 @@ def main():
     rejected = {"yes": 0, "no": 0}
     false_positives = []
     false_negatives = []
+    preserved = []
+    evaluated = []
 
     files = sorted(f for f in os.listdir(args.suite) if f.endswith(".c"))
     print(f"Scanning {len(files)} DRB sources in {args.suite} ...")
@@ -85,7 +196,19 @@ def main():
             continue
 
         src = os.path.join(args.suite, filename)
-        parallelized = run_loomx(args.loomx, src, args.mode)
+        pragma_result = run_loomx(args.loomx, src, args.mode, args.evaluation,
+                      args.strict_race_safety)
+        parallelized = pragma_result["added"]
+
+        if args.evaluation == "preserve" and pragma_result["preexisting"]:
+            preserved.append(filename)
+            results.append({
+                "file": filename,
+                "expected": "preexisting-pragma",
+                "actual": "preserved",
+                "correct": True,
+            })
+            continue
 
         if parallelized:
             accepted[label] += 1
@@ -102,20 +225,23 @@ def main():
             "actual": "accept" if parallelized else "reject",
             "correct": (label == "yes" and not parallelized) or (label == "no" and parallelized),
         })
+        evaluated.append(filename)
 
-    total = len(results)
-    correct = sum(1 for r in results if r["correct"])
+    total = len(evaluated)
+    correct = sum(1 for r in results if r["file"] in evaluated and r["correct"])
 
     with open(args.output, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["file", "expected", "actual", "correct"])
         w.writeheader()
         w.writerows(results)
 
-    print(f"\nMode: {args.mode}")
+        print(f"\nMode: {args.mode}  Evaluation: {args.evaluation}"
+            f"  Strict race safety: {args.strict_race_safety}")
     print(f"Total evaluated: {total}")
     print(f"Correct:         {correct} ({100.0*correct/total:.1f}%)" if total else "N/A")
     print(f"False positives (accepted a -yes race): {len(false_positives)}")
     print(f"False negatives (rejected a -no safe):  {len(false_negatives)}")
+    print(f"Preserved pre-existing pragma files:      {len(preserved)}")
     print(f"\nAccepted -no:  {accepted['no']}  Rejected -no:  {rejected['no']}")
     print(f"Accepted -yes: {accepted['yes']}  Rejected -yes: {rejected['yes']}")
 
