@@ -71,6 +71,37 @@ if [ "$SUITE" = "dataracebench" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Configuration matrix.
+#
+# This is the single source of truth for which variants of each benchmark are
+# generated, compiled, correctness-checked and timed.  Everything downstream
+# loops over CONFIGS / CHECK_CONFIGS rather than repeating a literal list, so
+# adding an arm means editing only this block.
+#
+#   seq            untouched source; timing and correctness reference
+#   cpu_omp        loomX --cpu-only, subject to the FLOP threshold
+#   cpu_forced     loomX --cpu-forced, always CPU OpenMP once the loop is safe.
+#                  Required for decision regret: it is the CPU arm that does not
+#                  quietly benefit from loomX declining to thread the loop.
+#   gpu_naive      loomX --gpu-naive, forces offload
+#   gpu_profitable loomX --gpu-profitable, loomX's own cost-model decision
+# ---------------------------------------------------------------------------
+declare -a CONFIGS=(seq cpu_omp cpu_forced gpu_naive gpu_profitable)
+# seq is the golden reference, so it is not itself correctness-checked.
+declare -a CHECK_CONFIGS=(cpu_omp cpu_forced gpu_naive gpu_profitable)
+
+# loomX mode flag for a config, or empty for the untouched baseline.
+loomx_mode_for_cfg() {
+    case "$1" in
+        cpu_omp) echo "--cpu-only" ;;
+        cpu_forced) echo "--cpu-forced" ;;
+        gpu_naive) echo "--gpu-naive" ;;
+        gpu_profitable) echo "--gpu-profitable" ;;
+        *) echo "" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # Pick the benchmark list and source directory.
 # ---------------------------------------------------------------------------
 declare -a BENCHES
@@ -302,23 +333,26 @@ generate_one() {
         loomx_args+=(-I"$NPB_DIR/common" -I"$(dirname "$src")")
     fi
 
-    "$LOOMX" --cpu-only "${loomx_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__cpu_omp.c" >/dev/null 2>&1 || {
-        echo "  WARN: loomX --cpu-only failed for $name"
-        return 1
-    }
-    "$LOOMX" --gpu-naive "${loomx_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__gpu_naive.c" >/dev/null 2>&1 || {
-        echo "  WARN: loomX --gpu-naive failed for $name"
-        return 1
-    }
-    "$LOOMX" --gpu-profitable "${loomx_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__gpu_profitable.c" >/dev/null 2>&1 || {
-        echo "  WARN: loomX --gpu-profitable failed for $name"
-        return 1
-    }
+    # Generate every parallel config from one loop so the config matrix stays in
+    # sync with CONFIGS.
+    local gen_cfgs=()
+    for cfg in "${CONFIGS[@]}"; do
+        [ "$cfg" = "seq" ] && continue
+        local mode
+        mode="$(loomx_mode_for_cfg "$cfg")"
+        if ! "$LOOMX" "$mode" "${loomx_args[@]}" "${loomx_extra[@]}" "$src" \
+                -o "out/$name/${name}__${cfg}.c" >/dev/null 2>&1; then
+            echo "  WARN: loomX $mode failed for $name"
+            return 1
+        fi
+        gen_cfgs+=("out/$name/${name}__${cfg}.c")
+    done
+
     # Post-process loomX output to work around known codegen issues:
     # 1) long-double constants are not supported on nvptx; downgrade to double.
     # 2) duplicate reduction variables (e.g. reduction(-:w, w)) are invalid.
-    sed -i -E 's/([0-9]+\.[0-9]*)L/\1/g' "out/$name/${name}__cpu_omp.c" "out/$name/${name}__gpu_naive.c" "out/$name/${name}__gpu_profitable.c"
-    sed -i -E 's/reduction\(([-+*]):([^,]+), \2\)/reduction(\1:\2)/g' "out/$name/${name}__cpu_omp.c" "out/$name/${name}__gpu_naive.c" "out/$name/${name}__gpu_profitable.c"
+    sed -i -E 's/([0-9]+\.[0-9]*)L/\1/g' "${gen_cfgs[@]}"
+    sed -i -E 's/reduction\(([-+*]):([^,]+), \2\)/reduction(\1:\2)/g' "${gen_cfgs[@]}"
 
     # Gram-Schmidt is numerically unstable; the parallel reduction on the norm
     # changes the summation order enough that the orthogonalisation diverges
@@ -326,7 +360,7 @@ generate_one() {
     # only the Q-update and column-update loops.
     if [[ "$name" == *"gramschmidt"* ]]; then
         sed -i -E '/#pragma omp (target teams distribute )?parallel for reduction\(\+:nrm\)/d' \
-            "out/$name/${name}__cpu_omp.c" "out/$name/${name}__gpu_naive.c" "out/$name/${name}__gpu_profitable.c"
+            "${gen_cfgs[@]}"
     fi
 
     # LU decomposition (ludcmp) exposes tiny inner reductions inside a strongly
@@ -335,7 +369,7 @@ generate_one() {
     # while still being numerically correct.  Run it sequentially for timing.
     if [[ "$name" == *"ludcmp"* ]]; then
         sed -i -E '/#pragma omp (target teams distribute )?parallel for/d' \
-            "out/$name/${name}__cpu_omp.c" "out/$name/${name}__gpu_naive.c" "out/$name/${name}__gpu_profitable.c"
+            "${gen_cfgs[@]}"
     fi
 
     # Generate separate SMALL_DATASET / DUMP_ARRAYS sources for numerical
@@ -344,19 +378,25 @@ generate_one() {
     if [ "$SUITE" = "polybench" ] || [ "$SUITE" = "polybench-full" ]; then
         local corr_args=(-DPOLYBENCH_DUMP_ARRAYS -DSMALL_DATASET)
         corr_args+=("${loomx_args[@]}")
-        "$LOOMX" --cpu-only "${corr_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__cpu_omp_corr.c" >/dev/null 2>&1 || true
-        "$LOOMX" --gpu-naive "${corr_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__gpu_naive_corr.c" >/dev/null 2>&1 || true
-        "$LOOMX" --gpu-profitable "${corr_args[@]}" "${loomx_extra[@]}" "$src" -o "out/$name/${name}__gpu_profitable_corr.c" >/dev/null 2>&1 || true
+        local corr_cfgs=()
+        for cfg in "${CONFIGS[@]}"; do
+            [ "$cfg" = "seq" ] && continue
+            local cmode
+            cmode="$(loomx_mode_for_cfg "$cfg")"
+            "$LOOMX" "$cmode" "${corr_args[@]}" "${loomx_extra[@]}" "$src" \
+                -o "out/$name/${name}__${cfg}_corr.c" >/dev/null 2>&1 || true
+            corr_cfgs+=("out/$name/${name}__${cfg}_corr.c")
+        done
         # Apply the same codegen workarounds to the correctness sources.
-        sed -i -E 's/([0-9]+\.[0-9]*)L/\1/g' "out/$name/${name}__cpu_omp_corr.c" "out/$name/${name}__gpu_naive_corr.c" "out/$name/${name}__gpu_profitable_corr.c" 2>/dev/null || true
-        sed -i -E 's/reduction\(([-+*]):([^,]+), \2\)/reduction(\1:\2)/g' "out/$name/${name}__cpu_omp_corr.c" "out/$name/${name}__gpu_naive_corr.c" "out/$name/${name}__gpu_profitable_corr.c" 2>/dev/null || true
+        sed -i -E 's/([0-9]+\.[0-9]*)L/\1/g' "${corr_cfgs[@]}" 2>/dev/null || true
+        sed -i -E 's/reduction\(([-+*]):([^,]+), \2\)/reduction(\1:\2)/g' "${corr_cfgs[@]}" 2>/dev/null || true
         if [[ "$name" == *"gramschmidt"* ]]; then
             sed -i -E '/#pragma omp (target teams distribute )?parallel for reduction\(\+:nrm\)/d' \
-                "out/$name/${name}__cpu_omp_corr.c" "out/$name/${name}__gpu_naive_corr.c" "out/$name/${name}__gpu_profitable_corr.c" 2>/dev/null || true
+                "${corr_cfgs[@]}" 2>/dev/null || true
         fi
         if [[ "$name" == *"ludcmp"* ]]; then
             sed -i -E '/#pragma omp (target teams distribute )?parallel for/d' \
-                "out/$name/${name}__cpu_omp_corr.c" "out/$name/${name}__gpu_naive_corr.c" "out/$name/${name}__gpu_profitable_corr.c" 2>/dev/null || true
+                "${corr_cfgs[@]}" 2>/dev/null || true
         fi
     fi
     return 0
@@ -560,7 +600,7 @@ compile_one() {
                 "$COMPILER_CPU" -O3 "$src" "${extra_flags[@]}" -o "$bin"
             fi
             ;;
-        cpu_omp)
+        cpu_omp|cpu_forced)
             "$COMPILER_CPU" -O3 -fopenmp "$src" "${extra_flags[@]}" -o "$bin"
             ;;
         gpu_naive|gpu_profitable)
@@ -580,7 +620,7 @@ compile_one() {
 
 echo "== Compiling =="
 for name in "${BENCHES[@]}"; do
-    for cfg in seq cpu_omp gpu_naive gpu_profitable; do
+    for cfg in "${CONFIGS[@]}"; do
         if compile_one "$name" "$cfg"; then
             echo "  ok  $name/$cfg"
         else
@@ -615,7 +655,7 @@ compile_correctness_one() {
             [ -f "$seq_src" ] || return 1
             "$COMPILER_CPU" -O3 "$seq_src" "${extra_flags[@]}" -o "$bin"
             ;;
-        cpu_omp)
+        cpu_omp|cpu_forced)
             [ -f "$src" ] || return 1
             "$COMPILER_CPU" -O3 -fopenmp "$src" "${extra_flags[@]}" -o "$bin"
             ;;
@@ -637,7 +677,7 @@ compile_correctness_one() {
 
 echo "== Compiling correctness variants =="
 for name in "${BENCHES[@]}"; do
-    for cfg in seq cpu_omp gpu_naive gpu_profitable; do
+    for cfg in "${CONFIGS[@]}"; do
         if compile_correctness_one "$name" "$cfg"; then
             echo "  ok  $name/${cfg}_corr"
         else
@@ -728,7 +768,7 @@ for name in "${BENCHES[@]}"; do
         ./"$golden_bin" $bargs > "$golden" 2>/dev/null || true
     fi
 
-    for cfg in cpu_omp gpu_naive gpu_profitable; do
+    for cfg in "${CHECK_CONFIGS[@]}"; do
         cand="bin/${name}__${cfg}"
         cand_out="results/${name}__${cfg}.out"
 
@@ -857,7 +897,7 @@ done
 echo "== Timing ($RUNS runs each) =="
 for name in "${BENCHES[@]}"; do
     bargs="$(bench_args_for "$name")"
-    for cfg in seq cpu_omp gpu_naive gpu_profitable; do
+    for cfg in "${CONFIGS[@]}"; do
         bin="bin/${name}__${cfg}"
         [ -x "$bin" ] || continue
         extra=""
